@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>项目管理看板（完美合并单元格）</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: "Microsoft YaHei", sans-serif;
+        }
+
+        body {
+            background: #f5f7fa;
+            padding: 20px;
+        }
+
+        .title {
+            text-align: center;
+            font-size: 22px;
+            margin-bottom: 16px;
+            color: #333;
+        }
+
+        .board {
+            display: flex;
+            width: 100%;
+            min-height: 80vh;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            overflow-x: auto;
+            position: relative;
+        }
+
+        .col {
+            flex-shrink: 0;
+            width: 260px;
+            border-right: 1px solid #eee;
+            position: relative;
+        }
+
+        .col-header {
+            padding: 12px;
+            background: #409eff;
+            color: white;
+            text-align: center;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .time-header {
+            background: #2f4050;
+        }
+
+        .cell {
+            padding: 10px;
+            height: 100px;
+            border-bottom: 1px solid #eee;
+            font-size: 14px;
+            color: #333;
+            outline: none;
+            cursor: text;
+            word-break: break-all;
+            line-height: 1.6;
+            position: relative;
+        }
+
+        .time-cell {
+            background: #fafbfc;
+            font-weight: 500;
+            color: #555;
+        }
+
+        .current-date-row {
+            background-color: #eaeaea !important;
+        }
+
+        .cell:hover {
+            background: #f0f7ff;
+        }
+
+        .cell:empty:before {
+            content: "责任人：\A进展：\A待跟进：";
+            white-space: pre;
+            color: #ccc;
+        }
+
+        .resize-handle {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 6px;
+            height: 100%;
+            background: #e1e8f0;
+            cursor: col-resize;
+            z-index: 20;
+        }
+
+        .resize-handle:hover {
+            background: #409eff;
+        }
+
+        .selected {
+            background: #d7e4ff !important;
+        }
+
+        .hidden-cell {
+            display: none !important;
+        }
+
+        .merged-container {
+            position: absolute;
+            left: 0;
+            right: 0;
+            background: #fff;
+            border: 1px solid #eee;
+            z-index: 5;
+            padding: 10px;
+            font-size: 14px;
+            line-height: 1.6;
+            outline: none;
+            color: #333;
+            word-break: break-all;
+        }
+
+        .merged-container:empty:before {
+            content: "责任人：\A进展：\A待跟进：";
+            white-space: pre;
+            color: #ccc;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="title">项目管理时间轴看板（6.1 - 12.30）</div>
+    <div class="board">
+        <div class="col">
+            <div class="col-header time-header">时间轴</div>
+            <div id="timeList"></div>
+            <div class="resize-handle"></div>
+        </div>
+
+        <div class="col" data-col="0">
+            <div class="col-header">项目申报</div>
+            <div class="col-body" id="col1"></div>
+            <div class="resize-handle"></div>
+        </div>
+
+        <div class="col" data-col="1">
+            <div class="col-header">内部立项与采购</div>
+            <div class="col-body" id="col2"></div>
+            <div class="resize-handle"></div>
+        </div>
+
+        <div class="col" data-col="2">
+            <div class="col-header">外部项目立项与采购</div>
+            <div class="col-body" id="col3"></div>
+            <div class="resize-handle"></div>
+        </div>
+
+        <div class="col" data-col="3">
+            <div class="col-header">交付实施</div>
+            <div class="col-body" id="col4"></div>
+            <div class="resize-handle"></div>
+        </div>
+    </div>
+
+    <script>
+        const DATA_KEY = "proj_data";
+        const MERGE_KEY = "proj_merges";
+        const allDates = [];
+        let dateObjects = [];
+
+        function genDates() {
+            const list = [];
+            let cur = new Date(2025, 5, 1);
+            const end = new Date(2025, 11, 30);
+            while (cur <= end) {
+                list.push(cur.getMonth() + 1 + "月" + cur.getDate() + "日");
+                dateObjects.push(new Date(cur));
+                cur.setDate(cur.getDate() + 5);
+            }
+            return list;
+        }
+
+        function load(key) {
+            const d = localStorage.getItem(key);
+            return d ? JSON.parse(d) : {};
+        }
+
+        function save(key, data) {
+            localStorage.setItem(key, JSON.stringify(data));
+        }
+
+        function highlightToday() {
+            const today = new Date();
+            document.querySelectorAll(".time-cell").forEach((el, i) => {
+                const d = dateObjects[i];
+                if (d.getMonth() === today.getMonth() && d.getDate() === today.getDate()) {
+                    el.classList.add("current-date-row");
+                    document.querySelectorAll(".col-body").forEach(col => {
+                        if (col.children[i]) col.children[i].classList.add("current-date-row");
+                    });
+                }
+            });
+        }
+
+        let selection = { col: null, start: -1, end: -1, cells: [] };
+
+        function build() {
+            const dates = genDates();
+            const data = load(DATA_KEY);
+            const merges = load(MERGE_KEY);
+            const timeList = document.getElementById("timeList");
+            const cols = [
+                document.getElementById("col1"),
+                document.getElementById("col2"),
+                document.getElementById("col3"),
+                document.getElementById("col4")
+            ];
+
+            dates.forEach((date, row) => {
+                const tdiv = document.createElement("div");
+                tdiv.className = "cell time-cell";
+                tdiv.innerText = date;
+                timeList.appendChild(tdiv);
+            });
+
+            cols.forEach((colBody, colIdx) => {
+                for (let row = 0; row < dates.length; row++) {
+                    const div = document.createElement("div");
+                    div.className = "cell";
+                    div.contentEditable = true;
+                    div.dataset.row = row;
+                    div.dataset.col = colIdx;
+                    if (data[colIdx]?.[row]) div.innerHTML = data[colIdx][row];
+                    colBody.appendChild(div);
+
+                    div.addEventListener("input", () => {
+                        const d = load(DATA_KEY);
+                        if (!d[colIdx]) d[colIdx] = {};
+                        d[colIdx][row] = div.innerHTML;
+                        save(DATA_KEY, d);
+                    });
+
+                    div.addEventListener("mousedown", (e) => {
+                        e.preventDefault();
+                        document.querySelectorAll(".selected").forEach(s => s.classList.remove("selected"));
+                        selection.cells = [div];
+                        selection.col = colIdx;
+                        selection.start = row;
+                        selection.end = row;
+                        div.classList.add("selected");
+                    });
+
+                    div.addEventListener("mouseover", () => {
+                        if (selection.cells.length && selection.col === colIdx) {
+                            document.querySelectorAll(".selected").forEach(s => s.classList.remove("selected"));
+                            selection.end = row;
+                            const s = Math.min(selection.start, selection.end);
+                            const e = Math.max(selection.start, selection.end);
+                            selection.cells = [];
+                            for (let i = s; i <= e; i++) {
+                                const cell = colBody.children[i];
+                                if (cell) {
+                                    cell.classList.add("selected");
+                                    selection.cells.push(cell);
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+
+            renderAllMerges();
+            highlightToday();
+        }
+
+        function renderAllMerges() {
+            document.querySelectorAll(".merged-container").forEach(m => m.remove());
+            document.querySelectorAll(".hidden-cell").forEach(c => c.classList.remove("hidden-cell"));
+
+            const merges = load(MERGE_KEY);
+            const colElements = [
+                document.getElementById("col1"),
+                document.getElementById("col2"),
+                document.getElementById("col3"),
+                document.getElementById("col4")
+            ];
+
+            for (const id in merges) {
+                const [colIdx, start, end] = id.split("-").map(Number);
+                const col = colElements[colIdx];
+                const first = col.children[start];
+                if (!first) continue;
+
+                for (let i = start; i <= end; i++) {
+                    col.children[i]?.classList.add("hidden-cell");
+                }
+
+                const m = document.createElement("div");
+                m.className = "merged-container";
+                m.contentEditable = true;
+                m.dataset.id = id;
+                m.style.top = first.offsetTop + "px";
+                m.style.height = 100 * (end - start + 1) + "px";
+                m.innerHTML = merges[id] || "";
+                col.parentElement.appendChild(m);
+
+                m.addEventListener("input", () => {
+                    const mu = load(MERGE_KEY);
+                    mu[id] = m.innerHTML;
+                    save(MERGE_KEY, mu);
+                });
+            }
+        }
+
+        function mergeSelected() {
+            if (selection.cells.length < 2) {
+                alert("请拖动选择至少2行再合并");
+                return;
+            }
+            const s = Math.min(selection.start, selection.end);
+            const e = Math.max(selection.start, selection.end);
+            const id = `${selection.col}-${s}-${e}`;
+            const mu = load(MERGE_KEY);
+            mu[id] = "";
+            save(MERGE_KEY, mu);
+            document.querySelectorAll(".selected").forEach(c => c.classList.remove("selected"));
+            selection = { col: null, start: -1, end: -1, cells: [] };
+            renderAllMerges();
+        }
+
+        document.addEventListener("contextmenu", (e) => {
+            if (selection.cells.length >= 2) {
+                e.preventDefault();
+                mergeSelected();
+            }
+        });
+
+        function enableResize() {
+            document.querySelectorAll(".resize-handle").forEach(h => {
+                h.addEventListener("mousedown", e => {
+                    const col = h.parentElement;
+                    const startX = e.pageX;
+                    const w = col.offsetWidth;
+                    const move = ev => {
+                        const nw = w + (ev.pageX - startX);
+                        if (nw >= 120 && nw <= 600) col.style.width = nw + "px";
+                    };
+                    const up = () => {
+                        document.removeEventListener("mousemove", move);
+                        document.removeEventListener("mouseup", up);
+                        renderAllMerges();
+                    };
+                    document.addEventListener("mousemove", move);
+                    document.addEventListener("mouseup", up);
+                });
+            });
+        }
+
+        build();
+        enableResize();
+    </script>
+</body>
+</html>
